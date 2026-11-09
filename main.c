@@ -9,10 +9,9 @@ int main(void)
 {
     int choice;
 
-    print_banner();
-
     for (;;)
     {
+        print_banner();
         print_menu();
         choice = read_menu_choice();
 
