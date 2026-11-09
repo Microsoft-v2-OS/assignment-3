@@ -38,8 +38,16 @@
 
 #define SHOW_COUNT 10
 #define LINE_BUF_SIZE 256
+#define GROUP_ID "04"
 
-/* print ke layar sekaligus tulis ke dua log, biar isinya selalu sama */
+/* logger std disimpan di sini supaya emit() bisa memakainya */
+static StdLogger std_log;
+
+/*
+ * tulis ke layar dan ke dua log dengan teks yang sama. std_logger_printf
+ * sudah mencetak ke layar sekaligus ke log std, jadi tidak perlu fputs
+ * ke stdout lagi (kalau ditambah, di layar jadi muncul dua kali).
+ */
 static void emit(const char *fmt, ...)
 {
     char line[LINE_BUF_SIZE];
@@ -49,8 +57,7 @@ static void emit(const char *fmt, ...)
     vsnprintf(line, sizeof(line), fmt, args);
     va_end(args);
 
-    fputs(line, stdout);
-    logger_std_write(line);
+    std_logger_printf(&std_log, "%s", line);
     logger_sys_write(line);
 }
 
@@ -68,7 +75,18 @@ static void discard_line(void)
 static void close_logs(void)
 {
     logger_sys_close();
-    logger_std_close();
+    std_logger_close(&std_log);
+}
+
+/* baca VmSize dan VmRSS lewat modul monitor, kalau gagal nilainya 0 */
+static void read_usage(MemoryUsage *usage)
+{
+    if (read_memory_usage(usage) != 0)
+    {
+        fprintf(stderr, "Gagal membaca /proc/self/status.\n");
+        usage->vm_size_kb = 0;
+        usage->vm_rss_kb = 0;
+    }
 }
 
 void run_malloc_free(void)
@@ -77,12 +95,10 @@ void run_malloc_free(void)
     long long i;
     long long shown;
     int *data;
-    long size_before, rss_before;
-    long size_after, rss_after;
-    long size_freed, rss_freed;
+    MemoryUsage before, after, freed;
 
     /* nama metode "malloc" dipakai buat nama file log */
-    if (logger_std_open("malloc") != 0)
+    if (std_logger_open(&std_log, GROUP_ID, "malloc") != 0)
     {
         fprintf(stderr, "Gagal membuka log Standard C Library.\n");
         return;
@@ -90,16 +106,16 @@ void run_malloc_free(void)
     if (logger_sys_open("malloc") != 0)
     {
         fprintf(stderr, "Gagal membuka log System Call.\n");
-        logger_std_close();
+        std_logger_close(&std_log);
         return;
     }
 
     emit("You picked malloc/free.\n");
 
     /* metrik sebelum alokasi, dibaca lewat modul monitor */
-    size_before = mem_get_vmsize_kb();
-    rss_before = mem_get_vmrss_kb();
-    emit("VmSize Before: %ld KB | VmRSS Before: %ld KB\n", size_before, rss_before);
+    read_usage(&before);
+    emit("VmSize Before: %llu KB | VmRSS Before: %llu KB\n",
+         before.vm_size_kb, before.vm_rss_kb);
 
     /* prompt cuma muncul di layar, tidak masuk log (sesuai contoh di soal) */
     printf("How many integers to allocate: ");
@@ -152,9 +168,9 @@ void run_malloc_free(void)
     }
 
     /* metrik setelah alokasi dan array terisi */
-    size_after = mem_get_vmsize_kb();
-    rss_after = mem_get_vmrss_kb();
-    emit("\nVmSize After: %ld KB | VmRSS After: %ld KB\n", size_after, rss_after);
+    read_usage(&after);
+    emit("\nVmSize After: %llu KB | VmRSS After: %llu KB\n",
+         after.vm_size_kb, after.vm_rss_kb);
 
     /*
      * blok besar (lewat mmap) langsung dikembalikan ke kernel waktu
@@ -164,9 +180,9 @@ void run_malloc_free(void)
     free(data);
     data = NULL;
 
-    size_freed = mem_get_vmsize_kb();
-    rss_freed = mem_get_vmrss_kb();
-    emit("VmSize After free: %ld KB | VmRSS After free: %ld KB\n", size_freed, rss_freed);
+    read_usage(&freed);
+    emit("VmSize After free: %llu KB | VmRSS After free: %llu KB\n",
+         freed.vm_size_kb, freed.vm_rss_kb);
 
     close_logs();
 }
